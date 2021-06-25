@@ -1,9 +1,8 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <mpi.h>
 #include <unistd.h>
+#include <omp.h>
 
-// #define DEBUG
 // #define DEBUG_FILE
 
 #pragma pack(1)
@@ -36,44 +35,36 @@ typedef struct rgb{
 /*-----------------------------------------*/
 // Declaração de funções
 void apply_median_filter(RGB** image,int mask,int h, int w,int i, int j);
-int writeFile(CABECALHO c,RGB** imagem_s,char* fileName);
+int writeFile(CABECALHO c,RGB** imagem_s,int ali,char* fileName);
 
 /*-----------------------------------------*/
 int main(int argc, char **argv){
 	FILE *fin;
 	CABECALHO c;
 	RGB* imagem_s;
-	RGB* slice_s;
 	RGB** imagem;
-	RGB** slice;
-	int i, j, id, nproc, mask,slice_sz,rem,offset,end;
+	int i, j, id, nth, mask,slice_sz,rem,offset,end;
 	int debug = 1;
 
-	MPI_Init(&argc, &argv);
-	MPI_Comm_rank(MPI_COMM_WORLD, &id);
-	MPI_Comm_size(MPI_COMM_WORLD, &nproc);
-
-	#ifdef DEBUG
-	
-	while(debug == 1){
-		sleep(2);
+	if ( argc != 5){
+		printf("%s <threads> <mascara> <entrada> <saida>\n", argv[0]);
+		exit(0);
 	}
 
-	#endif
-
-	if ( argc != 4){
-		printf("%s <mascara> <entrada> <saida>\n", argv[0]);
+	nth = atoi(argv[1]);
+	if ( nth <= 0 ){
+		printf("Numero de threads não inválido ! %d\n", nth);
 		exit(0);
 	}
 							
-	fin = fopen(argv[2], "rb");
+	fin = fopen(argv[3], "rb");
 	
 	if ( fin == NULL ){
 		printf("Erro ao abrir o arquivo %s\n", argv[2]);
 		exit(0);
 	}
 
-	mask = atoi(argv[1]);
+	mask = atoi(argv[2]);
 
 	if( mask % 2 == 0){
 		printf("Mascara deve ser ímpar ! \n");
@@ -85,76 +76,77 @@ int main(int argc, char **argv){
 	imagem = (RGB **)malloc(c.altura * sizeof(RGB*));
 	imagem_s = (RGB *)malloc(c.altura * c.largura * sizeof(RGB));
 
+	int ali = (c.largura * sizeof(RGB)) % 4;
+	if(ali != 0){
+		ali = 4 - ali;
+	}
 	
 	for(i=0; i<c.altura; i++){
 		imagem[i] = &imagem_s[i*c.largura];
-		if(id == 0){
-			// ler imagem
-			for (j = 0; j < c.largura; j++){
-				//le de forma serializada
-				fread(&imagem[i][j], sizeof(RGB),1, fin);
-			}
+		// ler imagem
+		for (j = 0; j < c.largura; j++){
+			//le de forma serializada
+			fread(&imagem[i][j], sizeof(RGB),1, fin);
+		}
+
+		// ler bytes do alinhamento
+		for (j = 0; j < ali; j++){
+			unsigned char b;
+			fread(&b, sizeof(unsigned char),1, fin);
 		}
 	}
 
-	//distribui imagem para os processos
-	MPI_Bcast(imagem_s,c.altura*c.largura*sizeof(RGB),MPI_BYTE,0,MPI_COMM_WORLD);
+	omp_set_num_threads(nth);
 
-	slice_sz = c.altura / nproc;
-
+	//tamanho do pedaço (altura)
+	slice_sz = c.altura / nth;
 	//sobra da divisão dos processos
-	rem = c.altura % nproc;
+	rem = c.altura % nth;
 
-	offset = id * slice_sz;
-	end = offset + slice_sz;
-
-	slice = (RGB **)malloc(slice_sz * sizeof(RGB*));
-	slice_s = (RGB*)malloc(sizeof(RGB) * slice_sz * c.largura);
-
-	// aplica filtro no pedaço da imagem 
-	for (i = offset; i < end; i++)
+	
+	#pragma omp parallel private (id,offset,end,i,j)
 	{
-		slice[(i-offset)] = &slice_s[(i-offset)*c.largura];
-		for (j = 0; j < c.largura; j++)
+		id = omp_get_thread_num();
+		offset = id * slice_sz;
+		end = offset + slice_sz;
+
+		// aplica filtro no pedaço da imagem 
+		for (i = offset; i < end; i++)
 		{
-			apply_median_filter(imagem,mask,c.altura,c.largura,i,j);
-			// salva pedaço filtrado (não é permitido utilizar a mesma variavel imagem)
-			slice[i - offset][j] = imagem[i][j];
-		}
-	}
-
-	#ifdef DEBUG_FILE
-	char debug_name[20];
-	sprintf(debug_name, "debug_%d.bmp", id);
-	if(!writeFile(c,imagem,debug_name)){
-		printf("Erro salvar imagem no arquivo %s\n", debug_name);
-	}
-	#endif
-
-	//recebe pedaços dos processos
-	MPI_Gather(slice_s,sizeof(RGB) * slice_sz * c.largura,MPI_BYTE,imagem_s,sizeof(RGB) * slice_sz * c.largura,MPI_BYTE,0,MPI_COMM_WORLD);
-
-	if(id == 0){
-		if(rem > 0){
-			for(i = slice_sz * nproc;i< c.altura;i++){
-				for (j = 0; j < c.largura; j++)
-				{
-					apply_median_filter(imagem,mask,c.altura,c.largura,i,j);
-				}
+			for (j = 0; j < c.largura; j++)
+			{
+				apply_median_filter(imagem,mask,c.altura,c.largura,i,j);
 			}
 		}
 
-		if(!writeFile(c,imagem,argv[3])){
-			printf("Erro salvar imagem no arquivo %s\n", argv[3]);
+		#ifdef DEBUG_FILE
+		char debug_name[20];
+		sprintf(debug_name, "debug_%d.bmp", id);
+		if(!writeFile(c,imagem,ali,debug_name)){
+			printf("Erro salvar imagem no arquivo %s\n", debug_name);
 		}
+		#endif
+	}
+
+	if(rem > 0){
+		for(i = slice_sz * nth;i< c.altura;i++){
+			for (j = 0; j < c.largura; j++)
+			{
+				apply_median_filter(imagem,mask,c.altura,c.largura,i,j);
+			}
+		}
+	}
+
+	if(!writeFile(c,imagem,ali,argv[4])){
+		printf("Erro salvar imagem no arquivo %s\n", argv[4]);
 	}
 
 	free(imagem_s);
 	fclose(fin);
-	MPI_Finalize();
+	return 0;
 }
 
-int writeFile(CABECALHO c,RGB** imagem,char* fileName){
+int writeFile(CABECALHO c,RGB** imagem,int ali,char* fileName){
 	int i,j;
 	FILE *fout;
 	fout = fopen(fileName, "wb");
@@ -169,6 +161,12 @@ int writeFile(CABECALHO c,RGB** imagem,char* fileName){
 		for ( j = 0; j < c.largura; j++)
 		{
 			fwrite(&imagem[i][j], sizeof(RGB) , 1, fout);
+		}
+
+		for ( j = 0; j < ali; j++)
+		{
+			unsigned char b;
+			fwrite(&b, sizeof(unsigned char) , 1, fout);
 		}
 		
 	}
