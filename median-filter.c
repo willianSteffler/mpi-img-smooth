@@ -3,6 +3,9 @@
 #include <mpi.h>
 #include <unistd.h>
 
+//#define DEBUG
+// #define DEBUG_FILE
+
 #pragma pack(1)
 
 typedef struct cabecalho{
@@ -33,23 +36,28 @@ typedef struct rgb{
 /*-----------------------------------------*/
 // Declaração de funções
 void apply_median_filter(RGB* image,int mask,int h, int w,int i, int j);
+int writeFile(CABECALHO c,RGB* imagem_s,char* fileName);
 
 /*-----------------------------------------*/
 int main(int argc, char **argv){
-	FILE *fin, *fout;
+	FILE *fin;
 	CABECALHO c;
-	RGB* slice_s;
 	RGB* imagem_s;
-	int i, j, id, nproc, mask,slice_sz,rem;
+	RGB* slice_s;
+	int i, j, id, nproc, mask,slice_sz,rem,offset,end;
 	int debug = 1;
 
 	MPI_Init(&argc, &argv);
 	MPI_Comm_rank(MPI_COMM_WORLD, &id);
 	MPI_Comm_size(MPI_COMM_WORLD, &nproc);
+
+	#ifdef DEBUG
 	
-	// while(debug == 1 && id ==0){
-	// 	sleep(2);
-	// }
+	while(debug == 1){
+		sleep(2);
+	}
+
+	#endif
 
 	if ( argc != 4){
 		printf("%s <mascara> <entrada> <saida>\n", argv[0]);
@@ -63,15 +71,6 @@ int main(int argc, char **argv){
 		exit(0);
 	}
 
-	if(id == 0){
-		fout = fopen(argv[3], "wb");
-
-		if ( fout == NULL ){
-			printf("Erro ao abrir o arquivo %s\n", argv[3]);
-			exit(0);
-		}
-	}
-
 	mask = atoi(argv[1]);
 
 	if( mask % 2 == 0){
@@ -81,10 +80,9 @@ int main(int argc, char **argv){
 
 
 	fread(&c, sizeof(CABECALHO), 1, fin);
+	imagem_s = (RGB *)malloc(c.altura * c.largura * sizeof(RGB));
 
 	if(id == 0){
-		imagem_s = (RGB *)malloc(c.altura * c.largura * sizeof(RGB));
-		fwrite(&c, sizeof(CABECALHO), 1, fout);
 		// ler imagem
 		for(i=0; i<c.altura; i++){
 			for (j = 0; j < c.largura; j++)
@@ -95,23 +93,37 @@ int main(int argc, char **argv){
 		}
 	}
 
+	//distribui imagem para os processos
+	MPI_Bcast(imagem_s,c.altura*c.largura*sizeof(RGB),MPI_BYTE,0,MPI_COMM_WORLD);
+
 	slice_sz = c.altura / nproc;
-	slice_s = (RGB*)malloc(sizeof(RGB) * slice_sz * c.largura);
 
 	//sobra da divisão dos processos
 	rem = c.altura % nproc;
 
-	//distribui pedaço para os processos
-	MPI_Scatter(imagem_s,sizeof(RGB) * slice_sz * c.largura,MPI_BYTE,slice_s,sizeof(RGB) * slice_sz * c.largura,MPI_BYTE,0,MPI_COMM_WORLD);
+	offset = id * slice_sz;
+	end = offset + slice_sz;
 
-	// aplica filtro no pedaço recebido 
-	for (i = 0; i < slice_sz; i++)
+	slice_s = (RGB*)malloc(sizeof(RGB) * slice_sz * c.largura);
+
+	// aplica filtro no pedaço da imagem 
+	for (i = offset; i < end; i++)
 	{
 		for (j = 0; j < c.largura; j++)
 		{
-			apply_median_filter(slice_s,mask,slice_sz,c.largura,i,j);
+			apply_median_filter(imagem_s,mask,c.altura,c.largura,i,j);
+			// salva pedaço filtrado (não é permitido utilizar a mesma variavel imagem)
+			slice_s[(i - offset)*c.largura + j] = imagem_s[i*c.largura + j];
 		}
 	}
+
+	#ifdef DEBUG_FILE
+	char debug_name[20];
+	sprintf(debug_name, "debug_%d.bmp", id);
+	if(!writeFile(c,imagem_s,debug_name)){
+		printf("Erro salvar imagem no arquivo %s\n", debug_name);
+	}
+	#endif
 
 	//recebe pedaços dos processos
 	MPI_Gather(slice_s,sizeof(RGB) * slice_sz * c.largura,MPI_BYTE,imagem_s,sizeof(RGB) * slice_sz * c.largura,MPI_BYTE,0,MPI_COMM_WORLD);
@@ -126,21 +138,36 @@ int main(int argc, char **argv){
 			}
 		}
 
-		for (i = 0; i < c.altura; i++)
-		{
-			for ( j = 0; j < c.largura; j++)
-			{
-				fwrite(&imagem_s[i*c.largura + j], sizeof(RGB) , 1, fout);
-			}
-			
+		if(!writeFile(c,imagem_s,argv[3])){
+			printf("Erro salvar imagem no arquivo %s\n", argv[3]);
 		}
-		free(imagem_s);
-		fclose(fout);
 	}
 
-	free(slice_s);
+	free(imagem_s);
 	fclose(fin);
 	MPI_Finalize();
+}
+
+int writeFile(CABECALHO c,RGB* imagem_s,char* fileName){
+	int i,j;
+	FILE *fout;
+	fout = fopen(fileName, "wb");
+
+	if ( fout == NULL ){
+		return 0;
+	}
+
+	fwrite(&c, sizeof(CABECALHO), 1, fout);
+	for (i = 0; i < c.altura; i++)
+	{
+		for ( j = 0; j < c.largura; j++)
+		{
+			fwrite(&imagem_s[i*c.largura + j], sizeof(RGB) , 1, fout);
+		}
+		
+	}
+	fclose(fout);
+	return 1;
 }
 
 // insertion sort
