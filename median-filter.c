@@ -3,7 +3,7 @@
 #include <mpi.h>
 #include <unistd.h>
 
-//#define DEBUG
+// #define DEBUG
 // #define DEBUG_FILE
 
 #pragma pack(1)
@@ -35,8 +35,8 @@ typedef struct rgb{
 
 /*-----------------------------------------*/
 // Declaração de funções
-void apply_median_filter(RGB* image,int mask,int h, int w,int i, int j);
-int writeFile(CABECALHO c,RGB* imagem_s,char* fileName);
+void apply_median_filter(RGB** image,int mask,int h, int w,int i, int j);
+int writeFile(CABECALHO c,RGB** imagem_s,char* fileName);
 
 /*-----------------------------------------*/
 int main(int argc, char **argv){
@@ -44,6 +44,8 @@ int main(int argc, char **argv){
 	CABECALHO c;
 	RGB* imagem_s;
 	RGB* slice_s;
+	RGB** imagem;
+	RGB** slice;
 	int i, j, id, nproc, mask,slice_sz,rem,offset,end;
 	int debug = 1;
 
@@ -80,15 +82,17 @@ int main(int argc, char **argv){
 
 
 	fread(&c, sizeof(CABECALHO), 1, fin);
+	imagem = (RGB **)malloc(c.altura * sizeof(RGB*));
 	imagem_s = (RGB *)malloc(c.altura * c.largura * sizeof(RGB));
 
-	if(id == 0){
-		// ler imagem
-		for(i=0; i<c.altura; i++){
-			for (j = 0; j < c.largura; j++)
-			{
+	
+	for(i=0; i<c.altura; i++){
+		imagem[i] = &imagem_s[i*c.largura];
+		if(id == 0){
+			// ler imagem
+			for (j = 0; j < c.largura; j++){
 				//le de forma serializada
-				fread(&imagem_s[i*c.largura + j], sizeof(RGB),1, fin);
+				fread(&imagem[i][j], sizeof(RGB),1, fin);
 			}
 		}
 	}
@@ -104,23 +108,25 @@ int main(int argc, char **argv){
 	offset = id * slice_sz;
 	end = offset + slice_sz;
 
+	slice = (RGB **)malloc(slice_sz * sizeof(RGB*));
 	slice_s = (RGB*)malloc(sizeof(RGB) * slice_sz * c.largura);
 
 	// aplica filtro no pedaço da imagem 
 	for (i = offset; i < end; i++)
 	{
+		slice[(i-offset)] = &slice_s[(i-offset)*c.largura];
 		for (j = 0; j < c.largura; j++)
 		{
-			apply_median_filter(imagem_s,mask,c.altura,c.largura,i,j);
+			apply_median_filter(imagem,mask,c.altura,c.largura,i,j);
 			// salva pedaço filtrado (não é permitido utilizar a mesma variavel imagem)
-			slice_s[(i - offset)*c.largura + j] = imagem_s[i*c.largura + j];
+			slice[i - offset][j] = imagem[i][j];
 		}
 	}
 
 	#ifdef DEBUG_FILE
 	char debug_name[20];
 	sprintf(debug_name, "debug_%d.bmp", id);
-	if(!writeFile(c,imagem_s,debug_name)){
+	if(!writeFile(c,imagem,debug_name)){
 		printf("Erro salvar imagem no arquivo %s\n", debug_name);
 	}
 	#endif
@@ -133,12 +139,12 @@ int main(int argc, char **argv){
 			for(i = slice_sz * nproc;i< c.altura;i++){
 				for (j = 0; j < c.largura; j++)
 				{
-					apply_median_filter(imagem_s,mask,c.altura,c.largura,i,j);
+					apply_median_filter(imagem,mask,c.altura,c.largura,i,j);
 				}
 			}
 		}
 
-		if(!writeFile(c,imagem_s,argv[3])){
+		if(!writeFile(c,imagem,argv[3])){
 			printf("Erro salvar imagem no arquivo %s\n", argv[3]);
 		}
 	}
@@ -148,7 +154,7 @@ int main(int argc, char **argv){
 	MPI_Finalize();
 }
 
-int writeFile(CABECALHO c,RGB* imagem_s,char* fileName){
+int writeFile(CABECALHO c,RGB** imagem,char* fileName){
 	int i,j;
 	FILE *fout;
 	fout = fopen(fileName, "wb");
@@ -162,7 +168,7 @@ int writeFile(CABECALHO c,RGB* imagem_s,char* fileName){
 	{
 		for ( j = 0; j < c.largura; j++)
 		{
-			fwrite(&imagem_s[i*c.largura + j], sizeof(RGB) , 1, fout);
+			fwrite(&imagem[i][j], sizeof(RGB) , 1, fout);
 		}
 		
 	}
@@ -217,7 +223,7 @@ RGB median(RGB* pixels,int length){
 }
 
 // aplica filtro de mediana
-void apply_median_filter(RGB* image,int mask,int h, int w,int i, int j){
+void apply_median_filter(RGB** image,int mask,int h, int w,int i, int j){
     // raio do centro
     int r = mask - (mask / 2) - 1;
     int l;
@@ -230,10 +236,10 @@ void apply_median_filter(RGB* image,int mask,int h, int w,int i, int j){
     {
         for (k = j-r < 0 ? 0 : j-r; k <= j+r && k < w ; k++)
         {
-            pixels[sz++] = image[l*w +k];
+            pixels[sz++] = image[l][k];
         }
     }
 
-    image[i*w +j] = median(pixels,sz);
+    image[i][j] = median(pixels,sz);
 	free(pixels);
 }
