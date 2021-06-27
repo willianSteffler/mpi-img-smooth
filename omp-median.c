@@ -60,7 +60,7 @@ int main(int argc, char **argv){
 	fin = fopen(argv[3], "rb");
 	
 	if ( fin == NULL ){
-		printf("Erro ao abrir o arquivo %s\n", argv[2]);
+		printf("Erro ao abrir o arquivo %s\n", argv[3]);
 		exit(0);
 	}
 

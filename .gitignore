@@ -1,0 +1,4 @@
+bin/*
+perf
+saida.bmp
+*.csv

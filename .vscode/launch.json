@@ -7,7 +7,7 @@
             "type": "cppdbg",
             "request": "attach",
             "processId": "${command:pickProcess}",
-            "program": "${fileDirname}/${fileBasenameNoExtension}",
+            "program": "${fileDirname}/bin/${fileBasenameNoExtension}",
             "MIMode": "gdb",
             "setupCommands": [
                 {
@@ -24,12 +24,12 @@
             "cwd": ".",
             "type": "cppdbg",
             "request": "launch",
-            "program": "${fileDirname}/${fileBasenameNoExtension}",
+            "program": "${fileDirname}/bin/${fileBasenameNoExtension}",
             "args": [
-                "2",                //threads
-                "3",                //mascara
-                "estatua.bmp",    //entrada
-                "saida.bmp"         //saida
+                "2",                        //threads
+                "3",                        //mascara
+                "../exemplos/estatua.bmp",  //entrada
+                "saida.bmp"                 //saida
             ],
             "MIMode": "gdb",
             "setupCommands": [
